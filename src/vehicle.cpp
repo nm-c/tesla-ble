@@ -677,8 +677,55 @@ void TeslaBLE::Vehicle::handle_session_info_message_(const UniversalMessage_Rout
 
 void TeslaBLE::Vehicle::handle_vcsec_message_(const UniversalMessage_RoutableMessage &msg) {
   LOG_DEBUG("Processing VCSEC message");
+
+  // Tesla reference (vehicle-command/pkg/vehicle/vcsec.go:23-44, case nil):
+  // RoutableMessage with no payload oneof set is a valid empty ACK.
+  // WAKE_VEHICLE RKE responses arrive in this shape (signedMessageStatus only).
+  if (msg.which_payload == 0) {
+    UniversalMessage_MessageFault_E fault = UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_NONE;
+    if (msg.has_signedMessageStatus) {
+      fault = msg.signedMessageStatus.signed_message_fault;
+    }
+
+    if (fault != UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_NONE) {
+      LOG_WARNING("VCSEC empty-payload response with fault=%d", fault);
+      if (auto cmd = peek_command_()) {
+        mark_command_failed_(cmd, CommandError::authentication_failed("VCSEC fault"));
+      }
+      return;
+    }
+
+    if (auto cmd = peek_command_()) {
+      if (cmd->current_auth_domain == UniversalMessage_Domain_DOMAIN_BROADCAST &&
+          cmd->state == CommandState::AUTH_RESPONSE_WAITING) {
+        // Auto-wake sub-step (initiate_wake_sequence_) ACK. Tesla treats this as
+        // wake delivered; vehicle finishes booting infotainment within seconds.
+        // Resume the parent command at the infotainment auth stage; transient
+        // infotainment auth failures during boot are absorbed by retry_command.
+        LOG_INFO("Wake ACK - vehicle waking, resuming pending command: %s", cmd->name.c_str());
+        is_vehicle_awake_ = true;
+        cmd->state = CommandState::IDLE;
+        cmd->current_auth_domain = UniversalMessage_Domain_DOMAIN_INFOTAINMENT;
+        cmd->last_tx_at = std::chrono::steady_clock::time_point();
+      } else if (cmd->name == "Wake" &&
+                 (cmd->state == CommandState::WAITING_FOR_RESPONSE ||
+                  cmd->state == CommandState::AUTH_RESPONSE_WAITING)) {
+        // Explicit Wake button command. Mark complete; the next periodic VCSEC
+        // GET_STATUS poll will deliver the authoritative sleep flag.
+        LOG_INFO("Wake button ACK");
+        mark_command_completed_(cmd);
+      } else if (cmd->state == CommandState::WAITING_FOR_RESPONSE) {
+        // Generic RKE ACK (e.g. Lock, Unlock, OpenTrunk) where the vehicle
+        // chose to omit a CommandStatus body.
+        LOG_DEBUG("VCSEC RKE ACK for: %s", cmd->name.c_str());
+        mark_command_completed_(cmd);
+      }
+    }
+    return;
+  }
+
   if (msg.which_payload != UniversalMessage_RoutableMessage_protobuf_message_as_bytes_tag) {
-    LOG_ERROR("VCSEC message missing protobuf payload");
+    LOG_WARNING("Unexpected VCSEC payload tag: %u", msg.which_payload);
     return;
   }
 
