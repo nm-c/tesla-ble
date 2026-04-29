@@ -1351,7 +1351,22 @@ void TeslaBLE::Vehicle::handle_signed_message_error_(const UniversalMessage_Rout
   }
 
   auto fault = msg.signedMessageStatus.signed_message_fault;
-  LOG_ERROR("Signed message error from %s: %s", domain_to_string(domain), message_fault_to_string(fault));
+  bool recoverable = false;
+  switch (fault) {
+    case UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_TIME_EXPIRED:
+    case UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_INCORRECT_EPOCH:
+    case UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_INVALID_TOKEN_OR_COUNTER:
+    case UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_INVALID_SIGNATURE:
+      recoverable = true;
+      break;
+    default:
+      break;
+  }
+  if (recoverable) {
+    LOG_INFO("Signed message recoverable fault from %s: %s", domain_to_string(domain), message_fault_to_string(fault));
+  } else {
+    LOG_ERROR("Signed message error from %s: %s", domain_to_string(domain), message_fault_to_string(fault));
+  }
 
   auto *peer = client_->get_peer(domain);
   if (peer) {

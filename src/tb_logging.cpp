@@ -110,11 +110,43 @@ const char *message_fault_to_string(UniversalMessage_MessageFault_E fault) {
   }
 }
 
-// Function to log UniversalMessage_MessageStatus
+// Function to log UniversalMessage_MessageStatus.
+//
+// Faults that automatically trigger session recovery (TIME_EXPIRED,
+// INCORRECT_EPOCH, INVALID_TOKEN_OR_COUNTER, INVALID_SIGNATURE) are
+// part of the normal command lifecycle once a session goes stale, so
+// they're emitted at INFO instead of ERROR to keep the debug stream
+// quiet for routine recoveries. OPERATIONSTATUS_OK shouldn't surface
+// here often, but if it does we drop it to DEBUG. Genuine errors
+// (INSUFFICIENT_PRIVILEGES, INACTIVE_KEY, REMOTE_ACCESS_DISABLED,
+// BAD_PARAMETER, etc.) keep ERROR so monitoring still flags them.
 void log_message_status(const char *tag, const UniversalMessage_MessageStatus *status) {
-  LOG_ERROR("  MessageStatus:");
-  LOG_ERROR("    operation_status: %s", operation_status_to_string(status->operation_status));
-  LOG_ERROR("    signed_message_fault: %s", message_fault_to_string(status->signed_message_fault));
+  bool is_ok = (status->operation_status == UniversalMessage_OperationStatus_E_OPERATIONSTATUS_OK);
+  bool recoverable = false;
+  switch (status->signed_message_fault) {
+    case UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_TIME_EXPIRED:
+    case UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_INCORRECT_EPOCH:
+    case UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_INVALID_TOKEN_OR_COUNTER:
+    case UniversalMessage_MessageFault_E_MESSAGEFAULT_ERROR_INVALID_SIGNATURE:
+      recoverable = true;
+      break;
+    default:
+      break;
+  }
+
+  if (is_ok) {
+    LOG_DEBUG("  MessageStatus:");
+    LOG_DEBUG("    operation_status: %s", operation_status_to_string(status->operation_status));
+    LOG_DEBUG("    signed_message_fault: %s", message_fault_to_string(status->signed_message_fault));
+  } else if (recoverable) {
+    LOG_INFO("  MessageStatus:");
+    LOG_INFO("    operation_status: %s", operation_status_to_string(status->operation_status));
+    LOG_INFO("    signed_message_fault: %s", message_fault_to_string(status->signed_message_fault));
+  } else {
+    LOG_ERROR("  MessageStatus:");
+    LOG_ERROR("    operation_status: %s", operation_status_to_string(status->operation_status));
+    LOG_ERROR("    signed_message_fault: %s", message_fault_to_string(status->signed_message_fault));
+  }
 }
 
 const char *vssec_signed_message_information_to_string(VCSEC_SignedMessage_information_E information) {
