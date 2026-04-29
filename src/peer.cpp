@@ -206,10 +206,13 @@ int Peer::update_session(Signatures_SessionInfo *session_info) {
   LOG_DEBUG("Session update check: epoch_changed=%d, time_advanced=%d (local=%u, vehicle=%u)", epoch_changed,
             time_advanced, clock_time_, session_info->clock_time);
 
-  if (!epoch_changed && session_info->counter < counter_) {
-    LOG_WARNING("Session counter replay detected (vehicle=%u, local=%u)", session_info->counter, counter_);
-    return TeslaBLE_Status_E_ERROR_COUNTER_REPLAY;
-  }
+  // No replay rejection here. The Tesla reference (vehicle-command signer.go:104-111)
+  // never errors out on session info; if the vehicle's counter is lower than ours we
+  // just keep ours. The block below already implements that. The previous strict
+  // "(!epoch_changed && counter regression) -> reject" guard prevented session
+  // recovery from TIME_EXPIRED whenever the local counter had advanced past the
+  // vehicle's last-processed counter, which is the normal state after a few
+  // signed commands.
 
   // Update counter based on error state or normal progression
   // Go implementation logic: if counter < info.Counter { counter = info.Counter }
